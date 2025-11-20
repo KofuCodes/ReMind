@@ -218,6 +218,7 @@ let baseline = {
     sessions.unshift(record);
     renderRiskSummary(record);
     renderHistoryTable();
+    sendResultToServer(record);
   
     // TODO: when backend exists, send this record to the server.
     // Example:
@@ -348,21 +349,21 @@ let baseline = {
    */
   
   async function sendResultToServer(record) {
-    // Placeholder. Uncomment + adapt when your API exists.
-    /*
-    try {
-      const res = await fetch("https://your-server/api/results", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(record)
-      });
-      if (!res.ok) {
-        console.error("Failed to sync with server", await res.text());
+      try {
+        const res = await fetch("http://localhost:3000/api/results", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(record)
+        });
+    
+        if (!res.ok) {
+          console.error("Failed to sync with server", await res.text());
+        }
+      } catch (err) {
+        console.error("Error syncing with server", err);
       }
-    } catch (err) {
-      console.error("Error syncing with server", err);
-    }
-    */
+
+    
   }
   
   /**
@@ -405,6 +406,35 @@ let baseline = {
       patient
     });
   }
+  
+  async function loadInitialSessions() {
+    try {
+      const res = await fetch("http://localhost:3000/api/results");
+      if (!res.ok) {
+        console.error("Failed to load sessions", await res.text());
+        renderHistoryTable(); // will show "No sessions yet" if empty
+        return;
+      }
+      const data = await res.json();
+      sessions = (data.sessions || []).map((s) => ({
+        ...s,
+        timestamp: new Date(s.timestamp)
+      }));
+  
+      if (sessions[0]) {
+        renderRiskSummary(sessions[0]);
+      } else {
+        renderRiskSummary(null);
+      }
+      renderHistoryTable();
+    } catch (err) {
+      console.error("Error loading sessions", err);
+      renderHistoryTable();
+    }
+  }
+  
+  // Call on load
+  loadInitialSessions();
   
   // If you want to auto-init any live connection later:
   // connectToEsp32();
