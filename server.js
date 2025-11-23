@@ -3,34 +3,31 @@ const express = require("express");
 const cors = require("cors");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000; // use 3000 for backend
 
 // Middleware
-app.use(cors());                 // allow browser frontend
-app.use(express.json());         // parse JSON bodies
+app.use(cors());               // allow browser frontend
+app.use(express.json());       // parse JSON bodies
+app.use(express.static("public")); // serve frontend from /public
 
 // In-memory store (for dev)
-// Replace with a real DB later (Mongo, Postgres, etc.)
 let sessions = [];
 
-// Helper: compute deviation score (same idea as in frontend)
-const baseline = {
-  accuracy: 0.9,
-  meanReactionMs: 1800
-};
-
+// Helper: compute deviation score (score-based, same as frontend)
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-function computeDeviationScore({ accuracy, avgReactionMs }) {
-  const accDiff = Math.max(0, baseline.accuracy - accuracy);
-  const rtDiffRatio = Math.max(
-    0,
-    (avgReactionMs - baseline.meanReactionMs) / Math.max(baseline.meanReactionMs, 1)
-  );
-  const raw = (accDiff * 1.4 + rtDiffRatio * 0.6) * 100;
-  return clamp(raw, 0, 100);
+function computeDeviationScoreFromScore(score) {
+  const baselineScore = 9.5; // typical 9–10
+  const worstScore = 0;
+
+  if (typeof score !== "number" || !Number.isFinite(score)) return 0;
+
+  const diff = Math.max(0, baselineScore - score);
+  const maxDiff = Math.max(baselineScore - worstScore, 1);
+
+  return clamp((diff / maxDiff) * 100, 0, 100);
 }
 
 function classifyRisk(score) {
@@ -47,24 +44,22 @@ function classifyRisk(score) {
 app.post("/score", (req, res) => {
   const { score, roundsPlayed, roundsCorrect, avgReactionMs, patientId } = req.body;
 
+  console.log("Received ESP /score:", req.body);
+
   if (typeof score !== "number") {
     return res.status(400).json({ error: "score must be a number" });
   }
 
-  // For now, if ESP only sends score, we treat it as a minimal record.
-  // You can upgrade this once the microcontroller sends more fields.
   const computedRoundsPlayed = roundsPlayed ?? 10;
-  const computedRoundsCorrect = roundsCorrect ?? Math.max(0, Math.min(score, computedRoundsPlayed));
+  const computedRoundsCorrect =
+    roundsCorrect ?? Math.max(0, Math.min(score, computedRoundsPlayed));
   const computedAvgReaction = avgReactionMs ?? 2000;
 
   const accuracy =
     computedRoundsPlayed > 0 ? computedRoundsCorrect / computedRoundsPlayed : 0;
 
-  const deviationScore = computeDeviationScore({
-    accuracy,
-    avgReactionMs: computedAvgReaction
-  });
-
+  // Deviation driven by score
+  const deviationScore = computeDeviationScoreFromScore(score);
   const riskLevel = classifyRisk(deviationScore);
 
   const record = {
@@ -78,7 +73,7 @@ app.post("/score", (req, res) => {
       notes: ""
     },
     score,
-    sequenceLength: null,          // unknown from ESP-only score
+    sequenceLength: null, // unknown from ESP-only score
     roundsPlayed: computedRoundsPlayed,
     roundsCorrect: computedRoundsCorrect,
     avgReactionMs: computedAvgReaction,
@@ -101,16 +96,18 @@ app.post("/score", (req, res) => {
 // --------------------------------------
 // 2) Full results from frontend: POST /api/results
 // --------------------------------------
-// Expected: same shape you use in app.js's `ingestResult` call.
-
+// Expected: shape used in app.js's ingestResult()
 app.post("/api/results", (req, res) => {
   const {
     sequenceLength,
     roundsPlayed,
     roundsCorrect,
     avgReactionMs,
-    patient
+    patient,
+    score: incomingScore
   } = req.body;
+
+  console.log("Received from WEB /api/results:", req.body);
 
   if (
     typeof roundsPlayed !== "number" ||
@@ -120,8 +117,14 @@ app.post("/api/results", (req, res) => {
     return res.status(400).json({ error: "Invalid payload numbers" });
   }
 
-  const accuracy = roundsPlayed > 0 ? roundsCorrect / roundsPlayed : 0;
-  const deviationScore = computeDeviationScore({ accuracy, avgReactionMs });
+  const accuracy =
+    roundsPlayed > 0 ? roundsCorrect / roundsPlayed : 0;
+
+  // Use score from body if present, otherwise derive from roundsCorrect
+  const score =
+    typeof incomingScore === "number" ? incomingScore : roundsCorrect;
+
+  const deviationScore = computeDeviationScoreFromScore(score);
   const riskLevel = classifyRisk(deviationScore);
 
   const record = {
@@ -132,6 +135,7 @@ app.post("/api/results", (req, res) => {
     roundsPlayed,
     roundsCorrect,
     avgReactionMs,
+    score,
     accuracy,
     deviationScore,
     riskLevel,
@@ -146,16 +150,13 @@ app.post("/api/results", (req, res) => {
 // --------------------------------------
 // 3) Get recent sessions: GET /api/results
 // --------------------------------------
-
 app.get("/api/results", (req, res) => {
-  // You could add query params like ?limit=50 or ?patientId=...
   res.json({ sessions });
 });
 
 // --------------------------------------
 // Start server
 // --------------------------------------
-
 app.listen(PORT, () => {
   console.log(`Remind backend listening on port ${PORT}`);
 });
